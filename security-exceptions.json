@@ -1,0 +1,11 @@
+{
+  "exceptions": [
+    {
+      "id": "CKV_AWS_18",
+      "component": "sandbox S3 target",
+      "reason": "No customer data; separate access-log bucket deferred to production design",
+      "owner": "learner",
+      "expires": "2026-12-31"
+    }
+  ]
+}

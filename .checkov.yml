@@ -1,0 +1,14 @@
+framework:
+  - terraform
+check:
+  - CKV_AWS_19
+  - CKV_AWS_21
+  - CKV_AWS_53
+  - CKV_AWS_54
+  - CKV_AWS_55
+  - CKV_AWS_56
+skip-check:
+  - CKV_AWS_18
+# Deliberate teaching baseline, not a claim of a complete compliance assessment.
+# CKV_AWS_18 access logging: owner learner; expires 2026-12-31.
+# Sandbox contains no customer data; add a separate log bucket before production use.

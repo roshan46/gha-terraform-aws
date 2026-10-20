@@ -1,0 +1,41 @@
+name: Terraform CI
+on:
+  workflow_call:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions: {}
+concurrency:
+  group: terraform-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e
+        with:
+          terraform_version: '1.16.1'
+          terraform_wrapper: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.12'
+      - run: python -m pip install --require-hashes -r requirements.txt
+      - run: terraform -chdir=infra fmt -check
+      - run: terraform -chdir=infra init -backend=false -lockfile=readonly
+      - run: terraform -chdir=infra validate
+      - run: python scripts/check-exceptions.py
+      - run: mkdir -p reports && checkov -d infra --config-file .checkov.yml -o junitxml > reports/checkov.xml
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: always()
+        with:
+          name: terraform-security
+          path: reports/
+          retention-days: 3
+          if-no-files-found: ignore

@@ -1,0 +1,27 @@
+name: Inspect OIDC
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        type: choice
+        options: [development, production]
+        default: development
+permissions: {}
+jobs:
+  inspect:
+    environment: ${{ inputs.environment }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      id-token: write
+    steps:
+      - name: Print selected claims, never the token
+        shell: bash
+        run: |
+          node --input-type=module <<'JS'
+          const r = await fetch(process.env.ACTIONS_ID_TOKEN_REQUEST_URL + '&audience=sts.amazonaws.com', {headers:{Authorization:'bearer ' + process.env.ACTIONS_ID_TOKEN_REQUEST_TOKEN}});
+          if (!r.ok) throw new Error('OIDC request failed');
+          const token = (await r.json()).value;
+          const c = JSON.parse(Buffer.from(token.split('.')[1], 'base64url'));
+          console.log(JSON.stringify({aud:c.aud,sub:c.sub,repository:c.repository,repository_id:c.repository_id},null,2));
+          JS
