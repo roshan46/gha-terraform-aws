@@ -1,0 +1,71 @@
+name: Terraform manually reviewed apply
+on:
+  workflow_dispatch:
+    inputs:
+      plan_run_id:
+        type: string
+        required: true
+      plan_attempt:
+        type: string
+        required: true
+      plan_sha256:
+        type: string
+        required: true
+      source_sha:
+        type: string
+        required: true
+permissions: {}
+concurrency:
+  group: terraform-sandbox
+  cancel-in-progress: false
+jobs:
+  apply:
+    if: github.ref == 'refs/heads/main'
+    environment: production
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      TF_VAR_region: ${{ vars.AWS_REGION }}
+      TF_VAR_account_id: ${{ vars.AWS_ACCOUNT_ID }}
+      TF_VAR_bucket_name: ${{ vars.TARGET_BUCKET }}
+      STATE_BUCKET: ${{ vars.STATE_BUCKET }}
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e
+        with:
+          terraform_version: '1.16.1'
+          terraform_wrapper: false
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd
+        with:
+          role-to-assume: ${{ vars.APPLY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+          allowed-account-ids: ${{ vars.AWS_ACCOUNT_ID }}
+      - name: Validate reviewed plan identity
+        env:
+          PLAN_RUN: ${{ inputs.plan_run_id }}
+          PLAN_ATTEMPT: ${{ inputs.plan_attempt }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          PLAN_SHA: ${{ inputs.plan_sha256 }}
+        run: |
+          [[ "$PLAN_RUN" =~ ^[0-9]+$ && "$PLAN_ATTEMPT" =~ ^[0-9]+$ ]]
+          [[ "$PLAN_SHA" =~ ^[0-9a-f]{64}$ ]]
+          [[ "$SOURCE_SHA" == "$GITHUB_SHA" ]]
+          echo "PLAN_RUN=$PLAN_RUN" >> "$GITHUB_ENV"
+          echo "PLAN_ATTEMPT=$PLAN_ATTEMPT" >> "$GITHUB_ENV"
+          bash scripts/check-latest.sh
+      - name: Initialize locked remote state
+        run: terraform -chdir=infra init -lockfile=readonly -backend-config="bucket=$STATE_BUCKET" -backend-config="key=state/terraform.tfstate" -backend-config="region=$AWS_REGION" -backend-config="use_lockfile=true"
+      - name: Apply the exact approved binary plan
+        env:
+          EXPECTED_SHA: ${{ inputs.plan_sha256 }}
+        run: |
+          aws s3 cp "s3://$STATE_BUCKET/plans/$PLAN_RUN/$PLAN_ATTEMPT/approved.tfplan" infra/approved.tfplan --only-show-errors
+          printf '%s  infra/approved.tfplan\n' "$EXPECTED_SHA" | sha256sum --check
+          terraform -chdir=infra apply -input=false approved.tfplan
