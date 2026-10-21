@@ -1,0 +1,61 @@
+name: Terraform plan only
+on:
+  workflow_dispatch:
+permissions: {}
+concurrency:
+  group: terraform-sandbox
+  cancel-in-progress: false
+jobs:
+  validation:
+    uses: ./.github/workflows/ci.yml
+    permissions:
+      contents: read
+  security:
+    uses: ./.github/workflows/security.yml
+    permissions:
+      contents: read
+  plan:
+    needs: [validation, security]
+    if: github.ref == 'refs/heads/main'
+    environment: development
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      TF_VAR_region: ${{ vars.AWS_REGION }}
+      TF_VAR_account_id: ${{ vars.AWS_ACCOUNT_ID }}
+      TF_VAR_bucket_name: ${{ vars.TARGET_BUCKET }}
+      STATE_BUCKET: ${{ vars.STATE_BUCKET }}
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      GH_TOKEN: ${{ github.token }}
+    outputs:
+      sha: ${{ steps.plan.outputs.sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e
+        with:
+          terraform_version: '1.16.1'
+          terraform_wrapper: false
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd
+        with:
+          role-to-assume: ${{ vars.PLAN_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+          allowed-account-ids: ${{ vars.AWS_ACCOUNT_ID }}
+      - run: bash scripts/check-latest.sh
+      - name: Initialize locked remote state
+        run: terraform -chdir=infra init -lockfile=readonly -backend-config="bucket=$STATE_BUCKET" -backend-config="key=state/terraform.tfstate" -backend-config="region=$AWS_REGION" -backend-config="use_lockfile=true"
+      - id: plan
+        name: Store plan privately, never in public GitHub artifacts
+        run: |
+          terraform -chdir=infra plan -out=approved.tfplan -no-color > "$RUNNER_TEMP/plan.txt"
+          terraform -chdir=infra show -json approved.tfplan > "$RUNNER_TEMP/plan.json"
+          sha=$(sha256sum infra/approved.tfplan | cut -d' ' -f1)
+          key="plans/$GITHUB_RUN_ID/$GITHUB_RUN_ATTEMPT"
+          aws s3 cp infra/approved.tfplan "s3://$STATE_BUCKET/$key/approved.tfplan" --sse AES256 --only-show-errors
+          aws s3 cp "$RUNNER_TEMP/plan.txt" "s3://$STATE_BUCKET/$key/plan.txt" --sse AES256 --only-show-errors
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          printf 'Review private S3 plan: %s/%s; SHA256 %s\n' "$STATE_BUCKET" "$key" "$sha" >> "$GITHUB_STEP_SUMMARY"
